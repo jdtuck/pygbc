@@ -1,3 +1,5 @@
+[![Pipeline Status](https://github.com/jdtuck/pygbc/actions/workflows/Build.yml/badge.svg)](https://github.com/jdtuck/pygbc/actions/workflows/Build.yml)
+
 # pygbc
 
 **Generative Bayesian Computation surrogates via Implicit Quantile Networks.**
