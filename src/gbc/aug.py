@@ -51,6 +51,15 @@ class AugGBCRegressor(GBCRegressor):
         clf_seed: seed for the mixture and the classifier. ``None`` (default)
             reuses ``seed``. The paper's Table 3 uses the replicate index here
             and ``rep * 13 + 7`` for ``seed``.
+        init_params: mixture initialization, passed to
+            :func:`~gbc.augiqn.cluster_y`. ``"kmeans"`` (default) matches the
+            paper; ``"random_from_data"`` avoids scikit-learn's k-means,
+            which segfaults on some macOS installs (see the README's
+            troubleshooting section).
+        cluster_threads: native thread cap for the mixture fit. ``1``
+            (default) makes the clustering reproducible across machines and
+            avoids the macOS OpenMP crash; ``None`` restores the library
+            default used by the upstream script.
 
     All other arguments are inherited from :class:`~gbc.GBCRegressor`.
 
@@ -88,6 +97,8 @@ class AugGBCRegressor(GBCRegressor):
         clf_epochs: int = 2000,
         clf_lr: float = 1e-3,
         clf_seed: Optional[int] = None,
+        init_params: str = "kmeans",
+        cluster_threads: Optional[int] = 1,
     ):
         super().__init__(
             epochs=epochs, hdim=hdim, nh=nh, lr=lr,
@@ -102,6 +113,8 @@ class AugGBCRegressor(GBCRegressor):
         self.clf_epochs = clf_epochs
         self.clf_lr = clf_lr
         self.clf_seed = clf_seed
+        self.init_params = init_params
+        self.cluster_threads = cluster_threads
 
         self.classifier_: Optional[ClassifierMLP] = None
         self.classifier_accuracy_: Optional[float] = None
@@ -119,7 +132,9 @@ class AugGBCRegressor(GBCRegressor):
         if self.n_components < 2:
             raise ValueError("n_components must be >= 2")
         seed = self._clf_seed
-        labels = cluster_y(y, n_components=self.n_components, seed=seed)
+        labels = cluster_y(y, n_components=self.n_components, seed=seed,
+                           init_params=self.init_params,
+                           threads=self.cluster_threads)
         if self.n_components > 2:
             # Collapse to "is this the top regime?" so the appended feature
             # stays a single probability, as in the paper.

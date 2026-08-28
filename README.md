@@ -88,7 +88,7 @@ model.classifier_accuracy_       # check this: near 0.5 means no usable regime
 model.regime_prob(X_test)        # P(regime = 1 | x)
 ```
 
-Everything from `GBCRegressor` carries over — the augmentation is applied automatically at predict time. Extra parameters: `n_components`, `clf_hdim`, `clf_layers`, `clf_epochs`, `clf_lr`, `clf_seed`.
+Everything from `GBCRegressor` carries over — the augmentation is applied automatically at predict time. Extra parameters: `n_components`, `clf_hdim`, `clf_layers`, `clf_epochs`, `clf_lr`, `clf_seed`, `init_params`, `cluster_threads`.
 
 On a smooth surface this buys nothing and costs an extra network. Use it where the paper does: Phantom and Star in Table 3.
 
@@ -197,14 +197,56 @@ Adam with cosine annealing; inputs and response standardized internally.
 
 ```
 gbc/
-  model.py    GBCRegressor
-  aug.py      AugGBCRegressor
-  iqn.py      IQN, train_iqn, sample_iqn
-  augiqn.py   cluster_y, ClassifierMLP, train_classifier, augment_features
-  metrics.py  crps_*, coverage, interval_score, rmse, ms, summarize
+  model.py       GBCRegressor
+  aug.py         AugGBCRegressor
+  iqn.py         IQN, train_iqn, sample_iqn
+  augiqn.py      cluster_y, ClassifierMLP, train_classifier, augment_features
+  metrics.py     crps_*, coverage, interval_score, rmse, ms, summarize
+  diagnostics.py diagnose()  —  also `python -m gbc`
 ```
 
 The upstream repo's `utils.py` (dataset loaders, split helpers, ledger logging) and the per-table experiment scripts are not packaged — they are experiment scaffolding rather than library surface.
+
+## Troubleshooting: segfault in scikit-learn's k-means
+
+A crash like this — most often on macOS with conda, and only when `AugGBCRegressor` or `cluster_y` runs:
+
+```
+Fatal Python error: Segmentation fault
+  File ".../sklearn/cluster/_kmeans.py", line 756 in _kmeans_single_lloyd
+  File ".../sklearn/mixture/_base.py", line 125 in _initialize_parameters
+```
+
+is not a bug in this package. PyTorch and a conda/MKL scikit-learn load **two different OpenMP runtimes** (`libomp` and `libiomp5`) into one process, and scikit-learn's k-means — which `GaussianMixture` uses to initialize — dies inside its parallel region. It is a long-standing interaction between the two projects ([pytorch#132372](https://github.com/pytorch/pytorch/issues/132372), [scikit-learn#21302](https://github.com/scikit-learn/scikit-learn/issues/21302), [scikit-learn#23574](https://github.com/scikit-learn/scikit-learn/issues/23574)).
+
+Confirm it:
+
+```bash
+python -m gbc
+```
+
+That prints your versions and every OpenMP runtime loaded. Two different ones is the smoking gun.
+
+Fixes, cheapest first:
+
+1. **Already the default.** `cluster_y(threads=1)` / `AugGBCRegressor(cluster_threads=1)` pin the fit to one thread, which avoids the parallel region. If you are on an older copy of this package, upgrade.
+2. **Pin the whole process** before Python starts — this also covers the test suite:
+   ```bash
+   OMP_NUM_THREADS=1 pytest
+   ```
+   (`tests/conftest.py` sets this for you when running pytest from the repo.)
+3. **Skip k-means entirely**:
+   ```python
+   AugGBCRegressor(init_params="random_from_data")
+   ```
+   `"random_from_data"`, `"random"` and `"k-means++"` all initialize the mixture without the crashing code path. On well-separated regimes they find the same clusters; on the package's jump-surface fixtures all four agree to >95%.
+4. **Fix the environment** so only one OpenMP runtime is present — `conda install nomkl`, or install `numpy`/`scipy`/`scikit-learn` from PyPI wheels rather than the MKL conda builds.
+
+Do **not** reach for `KMP_DUPLICATE_LIB_OK=TRUE`. It suppresses the runtime's own guard rather than the conflict, and can turn a clean abort into silent corruption.
+
+### A note on determinism
+
+scikit-learn's k-means changes its floating-point summation order with the thread count, so an unpinned `GaussianMixture` can produce bitwise-different cluster means on different machines — true of the upstream script too. Pinning to one thread by default makes `cluster_y` reproducible. Pass `threads=None` for the unpinned upstream behavior.
 
 ## Examples
 

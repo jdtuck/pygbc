@@ -30,13 +30,14 @@ helpers) is re-exported unchanged and produces identical numbers.
 from . import metrics
 from .aug import AugGBCRegressor
 from .augiqn import (ClassifierMLP, augment_features, cluster_y,
-                     get_regime_prob, train_classifier)
+                     get_regime_prob, thread_limit, train_classifier)
+from .diagnostics import diagnose
 from .iqn import IQN, resolve_device, sample_iqn, train_iqn
 from .metrics import (coverage, crps_gaussian, crps_samples, interval_score,
                       ms, rmse, summarize)
 from .model import GBCRegressor, NotFittedError
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     # classes
@@ -53,6 +54,8 @@ __all__ = [
     "get_regime_prob",
     "augment_features",
     "resolve_device",
+    "thread_limit",
+    "diagnose",
     # metrics
     "metrics",
     "crps_gaussian",

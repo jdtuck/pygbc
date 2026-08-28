@@ -13,7 +13,7 @@ import torch.nn as nn
 from sklearn.mixture import GaussianMixture
 
 import gbc
-from gbc import AugGBCRegressor
+from gbc import AugGBCRegressor, thread_limit
 
 from test_reference_parity import ref_sample_iqn, ref_train_iqn
 
@@ -21,9 +21,15 @@ from test_reference_parity import ref_sample_iqn, ref_train_iqn
 # ── Verbatim upstream reference ──────────────────────────────────────────────
 
 def ref_cluster_y(y, n_components=2, seed=0):
+    # Deviation from upstream: the fit is pinned to one thread. k-means is
+    # thread-count sensitive in its floating-point summation order (and
+    # segfaults outright when two OpenMP runtimes are loaded), so pinning is
+    # what makes an exact comparison meaningful at all. gbc.cluster_y pins
+    # identically by default, so parity below is still exact.
     gm = GaussianMixture(n_components=n_components, random_state=seed)
-    gm.fit(y.reshape(-1, 1))
-    labels = gm.predict(y.reshape(-1, 1))
+    with thread_limit(1):
+        gm.fit(y.reshape(-1, 1))
+        labels = gm.predict(y.reshape(-1, 1))
     if gm.means_[0, 0] > gm.means_[1, 0]:
         labels = 1 - labels
     return labels
@@ -256,3 +262,44 @@ def test_bad_n_components(jump_data):
     X, y, _, _ = jump_data
     with pytest.raises(ValueError):
         _package_model(n_components=1).fit(X, y)
+
+
+# ── OpenMP / threading escape hatches ────────────────────────────────────────
+
+def test_cluster_labels_stable_across_thread_settings(jump_data):
+    """Thread count must not change the clustering we depend on."""
+    _, y, _, _ = jump_data
+    pinned = gbc.cluster_y(y, seed=0, threads=1)
+    for threads in (None, 1, 2, 4):
+        np.testing.assert_array_equal(
+            pinned, gbc.cluster_y(y, seed=0, threads=threads))
+
+
+@pytest.mark.parametrize("init", ["kmeans", "k-means++", "random",
+                                  "random_from_data"])
+def test_kmeans_free_init_params_work(jump_data, init):
+    """The k-means-free inits are the fallback when OpenMP crashes."""
+    X, y, Xte, _ = jump_data
+    labels = gbc.cluster_y(y, seed=0, init_params=init)
+    # the jump is wide relative to the noise, so every init should find it
+    truth = (X[:, 0] >= 0.5).astype(int)
+    assert np.mean(labels == truth) > 0.95
+
+    m = _package_model(init_params=init).fit(X, y)
+    assert m.classifier_accuracy_ > 0.8
+    assert m.predict(Xte).shape == (len(Xte),)
+
+
+def test_thread_limit_is_a_noop_for_none():
+    with thread_limit(None):
+        pass
+    with thread_limit(1):
+        pass
+
+
+def test_diagnose_report_shape():
+    r = gbc.diagnose(verbose=False)
+    assert set(r) >= {"python", "platform", "versions", "openmp",
+                      "openmp_families", "duplicate_openmp", "advice"}
+    assert "torch" in r["versions"] and "sklearn" in r["versions"]
+    assert isinstance(r["duplicate_openmp"], bool)

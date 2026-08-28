@@ -14,6 +14,7 @@ Faithful port of the reference implementation released with Polson & Sokolov
 
 from __future__ import annotations
 
+import contextlib
 from typing import Callable, Optional, Tuple
 
 import numpy as np
@@ -23,16 +24,54 @@ import torch.nn as nn
 from .iqn import resolve_device
 
 __all__ = ["cluster_y", "ClassifierMLP", "train_classifier",
-           "get_regime_prob", "augment_features"]
+           "get_regime_prob", "augment_features", "thread_limit"]
 
 
-def cluster_y(y, n_components: int = 2, seed: int = 0) -> np.ndarray:
+@contextlib.contextmanager
+def thread_limit(threads: Optional[int]):
+    """Temporarily cap the native thread pools (BLAS / OpenMP).
+
+    ``threads=None`` is a no-op. This exists for two reasons:
+
+    * **Crash avoidance.** On macOS, PyTorch and a conda/MKL scikit-learn
+      often load two different OpenMP runtimes (``libomp`` and
+      ``libiomp5``) into one process. scikit-learn's k-means — which
+      :class:`~sklearn.mixture.GaussianMixture` uses to initialize — then
+      segfaults inside its OpenMP parallel region. Running it
+      single-threaded avoids that region.
+    * **Determinism.** Thread count changes floating-point summation order,
+      so an unpinned k-means can give bitwise-different cluster means on
+      different machines. Pinning makes :func:`cluster_y` reproducible.
+    """
+    if threads is None:
+        yield
+        return
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError:  # pragma: no cover - threadpoolctl ships with sklearn
+        yield
+        return
+    with threadpool_limits(limits=threads):
+        yield
+
+
+def cluster_y(y, n_components: int = 2, seed: int = 0,
+              init_params: str = "kmeans",
+              threads: Optional[int] = 1) -> np.ndarray:
     """EM-cluster the marginal response into regimes.
 
     Args:
         y: ``(n,)`` responses.
         n_components: number of mixture components (2 in the paper).
         seed: ``random_state`` for the GaussianMixture.
+        init_params: how the mixture is initialized. ``"kmeans"`` (default)
+            matches the paper. ``"random_from_data"`` and ``"random"`` skip
+            k-means entirely — use one of them if k-means segfaults in your
+            environment and ``threads=1`` did not help.
+        threads: native thread cap for the fit, via :func:`thread_limit`.
+            ``1`` (default) is deterministic and dodges the macOS OpenMP
+            crash; ``None`` uses whatever the libraries default to, which is
+            what the upstream script does.
 
     Returns:
         ``(n,)`` integer labels, relabeled so that component 0 has the lower
@@ -41,9 +80,11 @@ def cluster_y(y, n_components: int = 2, seed: int = 0) -> np.ndarray:
     from sklearn.mixture import GaussianMixture
 
     y = np.asarray(y, dtype=float).ravel()
-    gm = GaussianMixture(n_components=n_components, random_state=seed)
-    gm.fit(y.reshape(-1, 1))
-    labels = gm.predict(y.reshape(-1, 1))
+    gm = GaussianMixture(n_components=n_components, random_state=seed,
+                         init_params=init_params)
+    with thread_limit(threads):
+        gm.fit(y.reshape(-1, 1))
+        labels = gm.predict(y.reshape(-1, 1))
     if n_components == 2:
         if gm.means_[0, 0] > gm.means_[1, 0]:
             labels = 1 - labels
