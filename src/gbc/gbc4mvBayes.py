@@ -18,7 +18,7 @@ Pass `gbc_mvbayes_model` as the `bayesModel` argument to mvBayes(...).
 
 import numpy as np
 
-from .GBC_model import GBCRegressor
+from .model import GBCRegressor
 
 
 class _MvBayesGBCSamples:
