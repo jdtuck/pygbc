@@ -36,6 +36,7 @@ from .iqn import IQN, resolve_device, sample_iqn, train_iqn
 from .metrics import (coverage, crps_gaussian, crps_samples, interval_score,
                       ms, rmse, summarize)
 from .model import GBCRegressor, NotFittedError
+from .gbc4mvBayes import gbc4mvBayes
 
 __version__ = "0.2.1"
 
@@ -45,6 +46,7 @@ __all__ = [
     "AugGBCRegressor",
     "IQN",
     "ClassifierMLP",
+    "gbc4mvBayes",
     "NotFittedError",
     # functional API
     "train_iqn",
