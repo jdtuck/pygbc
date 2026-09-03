@@ -73,14 +73,23 @@ class MvBayesGBCWrapper:
         Xtest : array-like
             Test predictors.
         idxSamples : None or array-like of int
-            Indices of predictive draws to retain. If None, all draws are returned.
+            If None, return self.nSamples draws.
+            If provided, generate only len(idxSamples) draws and return them.
 
         Returns
         -------
         np.ndarray
             Array of shape (n_samples_selected, n_obs), compatible with mvBayes.
         """
-        draws = self.model.sample(Xtest, n_samples=self.nSamples)
+        if idxSamples is None:
+            n_draws = self.nSamples
+        else:
+            idxSamples = np.asarray(idxSamples)
+            if idxSamples.ndim == 0:
+                idxSamples = idxSamples.reshape(1)
+            n_draws = len(idxSamples)
+
+        draws = self.model.sample(Xtest, n_samples=n_draws)
         draws = np.asarray(draws)
 
         # GBCRegressor.sample is documented to return shape (n_samples, n_obs)
@@ -88,10 +97,6 @@ class MvBayesGBCWrapper:
             raise ValueError(
                 f"Expected predictive draws with 2 dimensions, got shape {draws.shape}."
             )
-
-        if idxSamples is not None:
-            idxSamples = np.asarray(idxSamples, dtype=int)
-            draws = draws[idxSamples, :]
 
         return draws
 

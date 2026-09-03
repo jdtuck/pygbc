@@ -256,17 +256,33 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
 
     # ── prediction ───────────────────────────────────────────────────────
 
+    def _sample_grid(self, X, n_samples: Optional[int] = None,
+                     chunk: Optional[int] = None) -> np.ndarray:
+        """Deterministic quantile-grid draws used for stable numerical integration.
+
+        Returns:
+            ``(n_samples, n)`` array on the original scale.
+        """
+        self._check_fitted()
+        X = self._prepare(X)
+        B = self.n_samples if n_samples is None else n_samples
+        taus = np.linspace(0.005, 0.995, B)
+        return sample_iqn(
+            self.model_, X, self.x_mean_, self.x_std_,
+            self.y_mean_, self.y_std_,
+            chunk=self.chunk if chunk is None else chunk, taus=taus)
+    
     def sample(self, X, n_samples: Optional[int] = None,
                chunk: Optional[int] = None) -> np.ndarray:
-        """Draw from the predictive distribution at each row of ``X``.
+        """Draw random samples from the predictive distribution at each row of ``X``.
 
-        Samples are the network's quantile function evaluated on an equally
-        spaced grid of levels in ``[0.005, 0.995]`` — a deterministic
-        stratified sample of ``y | x``.
+        Random quantile levels tau ~ Uniform(0, 1) are drawn and the learned
+        quantile function is evaluated at those taus. This is the natural way
+        to sample from the predictive distribution implied by the IQN.
 
         Args:
             X: ``(n, d)`` inputs.
-            n_samples: number of quantile levels (defaults to ``self.n_samples``).
+            n_samples: number of predictive draws (defaults to ``self.n_samples``).
             chunk: rows per forward pass (defaults to ``self.chunk``).
 
         Returns:
@@ -274,11 +290,12 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
         """
         self._check_fitted()
         X = self._prepare(X)
+        B = self.n_samples if n_samples is None else n_samples
+        taus = np.random.uniform(low=0.0, high=1.0, size=B)
         return sample_iqn(
             self.model_, X, self.x_mean_, self.x_std_,
             self.y_mean_, self.y_std_,
-            B=self.n_samples if n_samples is None else n_samples,
-            chunk=self.chunk if chunk is None else chunk)
+            chunk=self.chunk if chunk is None else chunk, taus=taus)
 
     def predict_quantiles(self, X, quantiles: Sequence[float] = (0.05, 0.5, 0.95),
                           chunk: Optional[int] = None) -> np.ndarray:
@@ -312,9 +329,10 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
             X: ``(n, d)`` inputs.
             return_std: also return the predictive standard deviation.
             n_samples: number of quantile levels used to average.
-            method: ``"samples"`` (default) averages the quantile grid — this
-                is what the paper reports. ``"mean_head"`` reads the network's
-                L1 mean head directly: one forward pass, but no ``return_std``.
+            method: ``"samples"`` (default) averages a deterministic equally
+                spaced quantile grid for stable numerical integration of the
+                conditional mean. ``"mean_head"`` reads the network's L1 mean
+                head directly: one forward pass, but no ``return_std``.
 
         Returns:
             ``mu`` of shape ``(n,)``, or ``(mu, sd)`` when ``return_std``.
@@ -327,7 +345,7 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
             return self._mean_head(X)
         if method != "samples":
             raise ValueError("method must be 'samples' or 'mean_head'")
-        s = self.sample(X, n_samples=n_samples)
+        s = self._sample_grid(X, n_samples=n_samples)
         mu = s.mean(0)
         return (mu, s.std(0)) if return_std else mu
 
