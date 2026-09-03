@@ -145,6 +145,24 @@ def test_regressor_matches_reference(data):
     np.testing.assert_array_equal(ref_mu, model.predict(Xte))
 
 
+def test_regressor_grid_matches_functional_sampler(data):
+    """The estimator must not rebuild the tau grid differently.
+
+    Regression test: sample(method="grid") used to build the levels with
+    np.linspace in float64 and pass them in as explicit taus. Rounding those
+    to float32 moves 4 of 21 levels by one ulp away from the torch.linspace
+    grid the reference uses, which showed up as ulp-level parity failures on
+    Windows (and was invisible elsewhere only because the perturbation
+    rounded away downstream).
+    """
+    X, y, Xte = data
+    m = gbc.GBCRegressor(epochs=EPOCHS, hdim=HDIM, nh=NH, seed=7,
+                         n_samples=B, device="cpu").fit(X, y)
+    direct = gbc.sample_iqn(m.model_, Xte, m.x_mean_, m.x_std_,
+                            m.y_mean_, m.y_std_, B=B)
+    np.testing.assert_array_equal(direct, m.sample(Xte, method="grid"))
+
+
 def test_loss_fn_matches_reference_at_fixed_tau(data):
     X, y, _ = data
     torch.manual_seed(3)

@@ -120,7 +120,7 @@ def test_metrics_work_on_a_real_fit():
     y = X[:, 0] ** 2 + 0.1 * rng.standard_normal(200)
     m = GBCRegressor(epochs=1500, hdim=32, nh=8, n_samples=101,
                      seed=0, device="cpu").fit(X, y)
-    s = m.sample(X)
+    s = m.sample(X, rng=0)
     out = metrics.summarize(y, s, rng=0)
     assert 0.0 < out["rmse"] < 0.3
     assert out["crps"] > 0

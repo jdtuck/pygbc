@@ -126,6 +126,35 @@ def test_determinism(data):
     assert not np.array_equal(a, c)
 
 
+def test_sample_rng_is_reproducible(fitted, data):
+    _, _, Xte, _ = data
+    a = fitted.sample(Xte, rng=0)
+    np.testing.assert_array_equal(a, fitted.sample(Xte, rng=0))
+    np.testing.assert_array_equal(
+        a, fitted.sample(Xte, rng=np.random.default_rng(0)))
+    assert not np.array_equal(a, fitted.sample(Xte, rng=1))
+
+
+def test_default_sampling_stream_is_seeded_and_advances(data):
+    """Two fits with the same seed sample identically; calls still differ."""
+    X, y, Xte, _ = data
+    m1 = GBCRegressor(seed=3, **SMALL).fit(X, y)
+    m2 = GBCRegressor(seed=3, **SMALL).fit(X, y)
+    first = m1.sample(Xte)
+    np.testing.assert_array_equal(first, m2.sample(Xte))
+    assert not np.array_equal(first, m1.sample(Xte))
+
+
+def test_sample_ignores_the_global_numpy_rng(fitted, data):
+    """Regression test: sample() used to consume np.random's global state."""
+    _, _, Xte, _ = data
+    np.random.seed(0)
+    fitted.sample(Xte, rng=0)
+    after = np.random.uniform()
+    np.random.seed(0)
+    assert after == np.random.uniform()
+
+
 def test_save_load_roundtrip(fitted, data, tmp_path):
     _, _, Xte, _ = data
     p = tmp_path / "model.pt"

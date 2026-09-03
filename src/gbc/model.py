@@ -111,6 +111,9 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
         self.x_mean_ = self.x_std_ = None
         self.y_mean_ = self.y_std_ = None
         self.history_: list = []
+        # Lazily seeded from `seed` on first random sample(); not a
+        # constructor parameter, so get_params()/clone() are unaffected.
+        self._sample_rng: Optional[np.random.Generator] = None
 
     # ── scikit-learn style parameter plumbing ────────────────────────────
 
@@ -213,6 +216,7 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
 
         self.n_features_in_ = X.shape[1]
         self.history_ = []
+        self._sample_rng = None  # fit-then-sample is reproducible from `seed`
 
         # Subclass hook: fit any preprocessing and map X into network space.
         X_net = self._fit_transform(X, y)
@@ -257,9 +261,26 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
 
     # ── prediction ───────────────────────────────────────────────────────
     
+    def _resolve_rng(self, rng) -> np.random.Generator:
+        """Pick the generator for the random quantile levels.
+
+        ``None`` uses the estimator's own stream, seeded from ``seed`` on
+        first use. That stream *advances* across calls, so repeated
+        ``sample()`` calls give fresh draws while the whole session stays
+        reproducible from ``seed``. Pass an int or a
+        :class:`numpy.random.Generator` to pin a single call.
+        """
+        if rng is None:
+            if getattr(self, "_sample_rng", None) is None:
+                self._sample_rng = np.random.default_rng(self.seed)
+            return self._sample_rng
+        if isinstance(rng, np.random.Generator):
+            return rng
+        return np.random.default_rng(rng)
+
     def sample(self, X, n_samples: Optional[int] = None,
                chunk: Optional[int] = None,
-               method: str = "random") -> np.ndarray:
+               method: str = "random", rng=None) -> np.ndarray:
         """Draw from the predictive distribution at each row of ``X``.
 
         Args:
@@ -272,6 +293,11 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
                   the learned quantile function at those random taus.
                 - ``"grid"``: evaluate the learned quantile function on an
                   equally spaced grid of quantile levels in ``[0.005, 0.995]``.
+            rng: ``None`` (default) draws from the estimator's own stream,
+                seeded from ``seed``; an int or
+                :class:`numpy.random.Generator` pins this call. Ignored by
+                ``method="grid"``, which is deterministic. The global
+                ``numpy.random`` state is never used or disturbed.
 
         Returns:
             ``(n_samples, n)`` array on the original scale.
@@ -281,15 +307,20 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
         B = self.n_samples if n_samples is None else n_samples
 
         if method == "random":
-            taus = np.random.uniform(low=0.0, high=1.0, size=B)
+            taus = self._resolve_rng(rng).uniform(low=0.0, high=1.0, size=B)
         elif method == "grid":
-            taus = np.linspace(0.005, 0.995, B)
+            # Leave the grid to sample_iqn, which builds it with
+            # torch.linspace in float32 — the same construction the reference
+            # implementation uses. Building it here with np.linspace in
+            # float64 and letting torch round it to float32 moves 4 of 21
+            # levels by one ulp and breaks bit-parity with the reference.
+            taus = None
         else:
             raise ValueError("method must be 'random' or 'grid'")
 
         return sample_iqn(
             self.model_, X, self.x_mean_, self.x_std_,
-            self.y_mean_, self.y_std_,
+            self.y_mean_, self.y_std_, B=B,
             chunk=self.chunk if chunk is None else chunk, taus=taus)
 
     def predict_quantiles(self, X, quantiles: Sequence[float] = (0.05, 0.5, 0.95),
