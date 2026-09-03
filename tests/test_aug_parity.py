@@ -179,7 +179,7 @@ def test_aug_regressor_matches_reference(jump_data):
 
     np.testing.assert_array_equal(ref_labels, model.regime_labels_)
     assert ref_acc == model.classifier_accuracy_
-    np.testing.assert_array_equal(ref_samp, model.sample(Xte))
+    np.testing.assert_array_equal(ref_samp, model.sample(Xte, method="grid"))
     np.testing.assert_array_equal(ref_samp.mean(0), model.predict(Xte))
 
 
