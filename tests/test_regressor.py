@@ -269,3 +269,58 @@ def test_diagnose_reports_accelerators():
     assert isinstance(a["cuda_devices"], list)
     # a CUDA-capable report must name its devices
     assert bool(a["cuda_devices"]) == a["cuda"]
+
+
+# ── performance options must not change results ──────────────────────────────
+
+def test_auto_chunk_is_sane():
+    from gbc import auto_chunk
+    assert auto_chunk(10) == 256          # floor
+    assert auto_chunk(100) == 256
+    assert auto_chunk(200, 256) == 256          # never more than needed... floor
+    assert auto_chunk(10_000, 256) == 1_000_000 // 256
+    assert auto_chunk(10_000_000, 256) == 1_000_000 // 256   # capped
+    assert auto_chunk(2_000, 256) == 2_000      # n below the target
+    assert auto_chunk(0) == 1
+
+
+def test_chunk_is_exact_when_it_covers_every_row(fitted, data):
+    """Any chunk >= n is a single pass, so results are bit-identical."""
+    _, _, Xte, _ = data
+    ref = fitted.sample(Xte, method="grid", chunk=1000)
+    for c in ("auto", 10_000, len(Xte)):
+        np.testing.assert_array_equal(
+            ref, fitted.sample(Xte, method="grid", chunk=c))
+
+
+def test_small_chunks_agree_to_float32_precision(fitted, data):
+    """Splitting the rows changes BLAS blocking, hence the last bits only."""
+    _, _, Xte, _ = data
+    ref = fitted.sample(Xte, method="grid", chunk=1000)
+    for c in (7, 250):
+        got = fitted.sample(Xte, method="grid", chunk=c)
+        np.testing.assert_allclose(ref, got, rtol=1e-5, atol=1e-6)
+
+
+def test_foreach_adam_gives_identical_weights(data):
+    """The multi-tensor optimizer is a speed knob, not a numerics change."""
+    import torch
+    X, y, Xte, _ = data
+    a = GBCRegressor(seed=0, **SMALL).fit(X, y)
+    b = GBCRegressor(seed=0, foreach=True, **SMALL).fit(X, y)
+    sa, sb = a.model_.state_dict(), b.model_.state_dict()
+    for k in sa:
+        assert torch.equal(sa[k], sb[k]), f"weights differ at {k}"
+    np.testing.assert_array_equal(a.predict(Xte), b.predict(Xte))
+
+
+def test_track_history_off_is_identical_but_silent(data):
+    import torch
+    X, y, Xte, _ = data
+    a = GBCRegressor(seed=0, **SMALL).fit(X, y)
+    b = GBCRegressor(seed=0, track_history=False, **SMALL).fit(X, y)
+    assert len(a.history_) == EPOCHS and b.history_ == []
+    sa, sb = a.model_.state_dict(), b.model_.state_dict()
+    for k in sa:
+        assert torch.equal(sa[k], sb[k])
+    np.testing.assert_array_equal(a.predict(Xte), b.predict(Xte))

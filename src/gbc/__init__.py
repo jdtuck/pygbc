@@ -32,13 +32,14 @@ from .aug import AugGBCRegressor
 from .augiqn import (ClassifierMLP, augment_features, cluster_y,
                      get_regime_prob, thread_limit, train_classifier)
 from .diagnostics import diagnose
-from .iqn import IQN, resolve_device, sample_iqn, train_iqn
+from .iqn import (IQN, auto_chunk, resolve_device, sample_iqn,
+                  train_iqn)
 from .metrics import (coverage, crps_gaussian, crps_samples, interval_score,
                       ms, rmse, summarize)
 from .model import GBCRegressor, NotFittedError
 from .gbc4mvBayes import gbc4mvBayes
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 __all__ = [
     # classes
@@ -56,6 +57,7 @@ __all__ = [
     "get_regime_prob",
     "augment_features",
     "resolve_device",
+    "auto_chunk",
     "thread_limit",
     "diagnose",
     # metrics

@@ -16,7 +16,8 @@ from typing import Optional, Sequence, Tuple
 import numpy as np
 import torch
 
-from .iqn import IQN, resolve_device, sample_iqn, train_iqn
+from .iqn import (IQN, auto_chunk, resolve_device, sample_iqn,
+                  train_iqn)
 
 __all__ = ["GBCRegressor", "NotFittedError"]
 
@@ -55,7 +56,9 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
             to auto-select CUDA when available.
         n_samples: default number of quantile levels used by
             :meth:`sample`, :meth:`predict` and :meth:`predict_interval`.
-        chunk: rows per forward pass at predict time (memory control).
+        chunk: rows per forward pass at predict time. ``1000`` (default)
+            matches the reference; ``"auto"`` sizes it for throughput
+            (faster on large prediction sets, ~1e-7 relative change).
         batch_size: opt-in minibatch training. ``None`` (default) reproduces
             the paper's full-batch loop.
         taus_per_step: opt-in averaging over several quantile levels per
@@ -65,6 +68,10 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
         patience: opt-in. Stop after this many epochs without improvement on
             the held-out pinball loss; best weights are restored.
         verbose: if > 0, print the training loss every ``verbose`` epochs.
+        foreach: multi-tensor Adam; see :func:`~gbc.iqn.train_iqn`.
+            Identical weights, ~10% faster at small ``n``.
+        track_history: set ``False`` to skip reading the loss back each
+            epoch (saves a GPU sync per step; ``history_`` stays empty).
 
     Attributes:
         model_: the fitted :class:`~gbc.iqn.IQN`.
@@ -83,12 +90,14 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
         seed: int = 42,
         device=None,
         n_samples: int = 500,
-        chunk: int = 1000,
+        chunk=1000,
         batch_size: Optional[int] = None,
         taus_per_step: int = 1,
         validation_fraction: Optional[float] = None,
         patience: Optional[int] = None,
         verbose: int = 0,
+        foreach: Optional[bool] = None,
+        track_history: bool = True,
     ):
         self.epochs = epochs
         self.hdim = hdim
@@ -105,6 +114,8 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
         self.validation_fraction = validation_fraction
         self.patience = patience
         self.verbose = verbose
+        self.foreach = foreach
+        self.track_history = track_history
 
         self.model_: Optional[IQN] = None
         self.n_features_in_: Optional[int] = None
@@ -259,6 +270,8 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
             validation_data=validation_data,
             patience=self.patience,
             callback=_cb,
+            foreach=self.foreach,
+            track_history=self.track_history,
         )
         self.model_ = model
         self.x_mean_, self.x_std_ = xm, xs
@@ -393,11 +406,14 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
         device = next(self.model_.parameters()).device
         Xt = torch.tensor((X - self.x_mean_) / self.x_std_,
                           dtype=torch.float32, device=device)
+        chunk = self.chunk
+        if chunk is None or chunk == "auto":
+            chunk = auto_chunk(len(Xt), self.hdim)
         outs = []
-        with torch.no_grad():
-            for i in range(0, len(Xt), self.chunk):
+        with torch.inference_mode():
+            for i in range(0, len(Xt), chunk):
                 outs.append(
-                    self.model_(Xt[i:i + self.chunk], 0.5)[:, 0].cpu().numpy())
+                    self.model_(Xt[i:i + chunk], 0.5)[:, 0].cpu().numpy())
         return np.concatenate(outs) * self.y_std_ + self.y_mean_
 
     def predict_interval(self, X, alpha: float = 0.90,

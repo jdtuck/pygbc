@@ -109,7 +109,7 @@ On a smooth surface this buys nothing and costs an extra network. Use it where t
 | `seed` | `42` | Torch seed set before initialization |
 | `device` | `None` | Auto-selects CUDA when available, else CPU (never MPS — see below) |
 | `n_samples` | `500` | Default number of quantile levels at predict time |
-| `chunk` | `1000` | Rows per forward pass (memory control) |
+| `chunk` | `1000` | Rows per forward pass; `"auto"` tunes for speed |
 | `verbose` | `0` | Print training loss every *n* epochs |
 
 Opt-in extras, all off by default (see below): `batch_size`, `taus_per_step`, `validation_fraction`, `patience`.
@@ -208,6 +208,50 @@ gbc/
 ```
 
 The upstream repo's `utils.py` (dataset loaders, split helpers, ledger logging) and the per-table experiment scripts are not packaged — they are experiment scaffolding rather than library surface.
+
+## Making it faster
+
+Measured on 2 CPU cores, `d=4`, predicting on all `n` rows. Your absolute times will be lower; the ratios are what transfer.
+
+### Prediction
+
+| Change | n=10,000 | n=20,000 | Cost |
+|---|---|---|---|
+| baseline (`B=500`, `chunk=1000`) | 5.9 s | 11.3 s | — |
+| `chunk="auto"` | 4.5x → **1.13x** | **1.12x** | ~1e-7 relative |
+| `n_samples=100` + `chunk="auto"` | **4.9x** | **5.6x** | none measurable |
+| `predict(method="mean_head")` | **~600x** | **~600x** | ~1% higher RMSE |
+
+**Cutting `n_samples` is the big lever and it is nearly free.** Sampling cost is exactly linear in the number of quantile levels, and RMSE and coverage are flat from `B≈100`:
+
+```
+B=500: RMSE=0.1012  Cov90=0.910
+B=100: RMSE=0.1012  Cov90=0.910
+```
+
+One caveat: the CRPS *estimator* is biased at small `B` (the energy score's pairing term), so keep `B >= 200` when you are reporting CRPS, even though the model itself is unchanged.
+
+**For point predictions only, use the mean head.** `predict(method="mean_head")` is one forward pass instead of `B`, and reads the network's L1 mean output directly rather than averaging the quantile grid. Its accuracy converges as training proceeds — on a 4000-point fit, grid-vs-head disagreement fell from 0.068 at 300 epochs to 0.008 at 3000. At convergence it cost ~1% RMSE for a ~600x speedup. Use the grid when you need intervals or CRPS.
+
+**`chunk="auto"`** targets ~1M hidden activations per forward pass (about 4000 rows at `hdim=256`). It is worth ~12%, and it is opt-in because chunk size is *not* numerically neutral: splitting the rows differently sends the matmuls down a different BLAS blocking path and moves results by ~1e-7 relative. Chunks at or above `n` stay bit-identical to the default. The optimum is cache-dependent — benchmark on your own hardware before trusting it.
+
+### Fitting
+
+| Option | Effect |
+|---|---|
+| `foreach=True` | ~1.08x at small/medium `n`, **weights identical** |
+| `track_history=False` | skips a device sync per epoch (matters on GPU, not CPU) |
+| `validation_fraction` + `patience` | the real win — stop when it has converged |
+| `batch_size=...` | **slower**, do not use it for speed |
+
+Two negative results worth recording, because both look like obvious wins and are not:
+
+- **Minibatching does not help.** At `n=20,000`, `batch_size=1024` matched full-batch and `batch_size=256` was **3x slower** — same work per epoch, split into more and smaller kernel launches. `batch_size` is for changing the optimization, not for speed.
+- **`torch.compile` is much worse here**, ~50x slower at small `n`. `loss_fn` draws `tau` with `.item()`, which is a graph break, and the resulting python float is then baked into the traced graph so Dynamo recompiles every single step until it hits the recompile limit. Keeping `tau` as a 0-d tensor would fix both that and the per-step device sync — but the tau arithmetic then runs in float32 instead of python float64 and the loss stops being bitwise equal to the reference, so this package does not do it. If you ever relax the parity requirement, that is the first thing to change.
+
+Where the time actually goes, profiled: at `n=133` a step is ~2.4 ms split roughly evenly between backward (32%), the Adam step (29%) and the forward (26%) — all dispatch overhead, no real math, which is why `foreach` helps there and nothing else does. At `n>=10,000` it is BLAS-bound in `fc1`, so only fewer epochs, more threads, or a GPU will move it.
+
+Also check `torch.set_num_threads()`: PyTorch does not always pick well, and on this 2-core box the difference between 1 and 2 threads was 1.6x on sampling.
 
 ## Is the GPU being used?
 

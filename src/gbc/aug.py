@@ -85,12 +85,14 @@ class AugGBCRegressor(GBCRegressor):
         seed: int = 42,
         device=None,
         n_samples: int = 500,
-        chunk: int = 1000,
+        chunk=1000,
         batch_size: Optional[int] = None,
         taus_per_step: int = 1,
         validation_fraction: Optional[float] = None,
         patience: Optional[int] = None,
         verbose: int = 0,
+        foreach: Optional[bool] = None,
+        track_history: bool = True,
         n_components: int = 2,
         clf_hdim: int = 256,
         clf_layers: int = 3,
@@ -106,7 +108,8 @@ class AugGBCRegressor(GBCRegressor):
             device=device, n_samples=n_samples, chunk=chunk,
             batch_size=batch_size, taus_per_step=taus_per_step,
             validation_fraction=validation_fraction, patience=patience,
-            verbose=verbose)
+            verbose=verbose, foreach=foreach,
+            track_history=track_history)
         self.n_components = n_components
         self.clf_hdim = clf_hdim
         self.clf_layers = clf_layers
