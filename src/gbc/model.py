@@ -150,6 +150,19 @@ class GBCRegressor(_RegressorMixin, _BaseEstimator):
         """Whether :meth:`fit` has been called."""
         return self.model_ is not None
 
+    @property
+    def device_(self) -> torch.device:
+        """The device the fitted network actually lives on.
+
+        This is the ground truth for "did it use the GPU?" — ``device=None``
+        auto-selects, and silently falls back to CPU when no supported
+        accelerator is found. Before :meth:`fit`, reports what would be
+        selected.
+        """
+        if self.model_ is None:
+            return resolve_device(self.device)
+        return next(self.model_.parameters()).device
+
     def _check_fitted(self) -> None:
         if not self.is_fitted:
             raise NotFittedError(

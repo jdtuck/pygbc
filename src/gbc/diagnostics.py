@@ -19,6 +19,31 @@ from collections import defaultdict
 __all__ = ["diagnose"]
 
 
+def _accelerators() -> dict:
+    """What compute devices this PyTorch build can actually reach."""
+    info = {"cuda": False, "cuda_devices": [], "mps_built": False,
+            "mps_available": False, "resolved": "cpu", "torch_threads": None}
+    try:
+        import torch
+    except ImportError:  # pragma: no cover
+        return info
+
+    info["cuda"] = torch.cuda.is_available()
+    if info["cuda"]:
+        info["cuda_devices"] = [
+            torch.cuda.get_device_name(i)
+            for i in range(torch.cuda.device_count())]
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None:
+        info["mps_built"] = bool(mps.is_built())
+        info["mps_available"] = bool(mps.is_available())
+    info["torch_threads"] = torch.get_num_threads()
+
+    from .iqn import resolve_device
+    info["resolved"] = str(resolve_device())
+    return info
+
+
 def _openmp_runtimes():
     try:
         from threadpoolctl import threadpool_info
@@ -51,9 +76,17 @@ def diagnose(verbose: bool = True) -> dict:
         except Exception as exc:  # pragma: no cover
             versions[name] = f"<not importable: {exc}>"
 
+    accel = _accelerators()
     runtimes = _openmp_runtimes()
     advice = []
     duplicate = False
+
+    if not accel["cuda"] and accel["mps_available"]:
+        advice.append(
+            "An Apple GPU (MPS) is present but gbc will not use it: the "
+            "automatic device choice is CUDA-or-CPU, so device=None resolves "
+            "to CPU here. Pass device='mps' explicitly to try it. Check what "
+            "a fitted model actually used with model.device_.")
 
     families = []
     if runtimes is None:  # pragma: no cover
@@ -96,6 +129,7 @@ def diagnose(verbose: bool = True) -> dict:
         "python": sys.version.split()[0],
         "platform": f"{platform.system()} {platform.machine()}",
         "versions": versions,
+        "accelerators": accel,
         "openmp": runtimes,
         "openmp_families": families,
         "duplicate_openmp": duplicate,
@@ -113,6 +147,17 @@ def diagnose(verbose: bool = True) -> dict:
         if report["env"]:
             print("env         " + ", ".join(f"{k}={v}" for k, v
                                              in report["env"].items()))
+
+        print("\nCompute")
+        print(f"  CUDA available   {accel['cuda']}"
+              + (f"  ({', '.join(accel['cuda_devices'])})"
+                 if accel["cuda_devices"] else ""))
+        print(f"  MPS (Apple GPU)  built={accel['mps_built']} "
+              f"available={accel['mps_available']}")
+        print(f"  torch threads    {accel['torch_threads']}")
+        print(f"  device=None ->   {accel['resolved']}"
+              + ("   <-- GPU NOT in use"
+                 if accel["resolved"] == "cpu" else "   <-- GPU in use"))
         print(f"\nOpenMP runtimes loaded: "
               f"{len(runtimes) if runtimes is not None else '?'}")
         for d in runtimes or []:

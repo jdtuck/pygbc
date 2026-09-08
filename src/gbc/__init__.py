@@ -38,7 +38,7 @@ from .metrics import (coverage, crps_gaussian, crps_samples, interval_score,
 from .model import GBCRegressor, NotFittedError
 from .gbc4mvBayes import gbc4mvBayes
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     # classes

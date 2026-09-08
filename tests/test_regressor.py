@@ -239,3 +239,33 @@ def test_bad_extras_raise(data):
         GBCRegressor(taus_per_step=0, **SMALL).fit(X, y)
     with pytest.raises(ValueError):
         GBCRegressor(validation_fraction=1.5, patience=3, **SMALL).fit(X, y)
+
+
+# ── device reporting ─────────────────────────────────────────────────────────
+
+def test_device_property_before_and_after_fit(data):
+    import torch
+    X, y, _, _ = data
+    m = GBCRegressor(seed=0, **SMALL)
+    assert m.device_ == torch.device("cpu")      # what fit() would select
+    m.fit(X, y)
+    assert m.device_ == next(m.model_.parameters()).device
+
+
+def test_device_property_reports_explicit_device(data):
+    import torch
+    X, y, _, _ = data
+    m = GBCRegressor(seed=0, **{**SMALL, "device": "cpu"}).fit(X, y)
+    assert m.device_ == torch.device("cpu")
+
+
+def test_diagnose_reports_accelerators():
+    import gbc
+    a = gbc.diagnose(verbose=False)["accelerators"]
+    assert set(a) >= {"cuda", "cuda_devices", "mps_built", "mps_available",
+                      "resolved", "torch_threads"}
+    assert a["resolved"] in ("cpu", "cuda", "mps")
+    assert isinstance(a["cuda"], bool)
+    assert isinstance(a["cuda_devices"], list)
+    # a CUDA-capable report must name its devices
+    assert bool(a["cuda_devices"]) == a["cuda"]

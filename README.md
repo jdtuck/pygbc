@@ -107,7 +107,7 @@ On a smooth surface this buys nothing and costs an extra network. Use it where t
 | `weight_decay` | `1e-4` | Adam weight decay |
 | `loss_w` | `(0.3, 0.3, 0.4)` | `(mean anchor, monotonicity, quantile)` weights |
 | `seed` | `42` | Torch seed set before initialization |
-| `device` | `None` | Auto-selects CUDA when available |
+| `device` | `None` | Auto-selects CUDA when available, else CPU (never MPS — see below) |
 | `n_samples` | `500` | Default number of quantile levels at predict time |
 | `chunk` | `1000` | Rows per forward pass (memory control) |
 | `verbose` | `0` | Print training loss every *n* epochs |
@@ -208,6 +208,42 @@ gbc/
 ```
 
 The upstream repo's `utils.py` (dataset loaders, split helpers, ledger logging) and the per-table experiment scripts are not packaged — they are experiment scaffolding rather than library surface.
+
+## Is the GPU being used?
+
+```python
+model.device_          # the device the fitted network actually lives on
+```
+
+```bash
+python -m gbc          # what this environment can reach, before you fit
+```
+
+`python -m gbc` now prints a `Compute` block:
+
+```
+Compute
+  CUDA available   False
+  MPS (Apple GPU)  built=True available=True
+  torch threads    8
+  device=None ->   cpu   <-- GPU NOT in use
+```
+
+`device=None` (the default) selects **CUDA if available, else CPU** — it does not try Apple's MPS backend, so on Apple silicon it silently resolves to CPU. Nothing warns you; the run is just slower. `diagnose()` flags that case explicitly when it sees an unused Apple GPU.
+
+To force a device:
+
+```python
+GBCRegressor(device="cuda")   # or "cuda:1"
+GBCRegressor(device="mps")    # Apple GPU — opt-in, see caveats below
+GBCRegressor(device="cpu")
+```
+
+On CUDA, `nvidia-smi -l 1` during a fit is the external confirmation: the python process should be listed with non-zero utilization.
+
+**Whether the GPU is worth it depends on `n`.** Training is full-batch, so each epoch is one forward/backward over the entire dataset. At `n` in the hundreds (motorcycle, Table 1) the kernel-launch overhead of 3,000 sequential tiny steps dominates and CPU usually wins. At `n` in the tens of thousands (Table 3's Michalewicz is 90,000 x 4) the per-epoch matmuls are large enough that the GPU pays off — which is why the paper recommends one for Table 3.
+
+MPS caveats: results will not match CPU bit-for-bit (different kernels and reduction orders), so the reproducibility guarantees above hold per-device, not across devices. Op coverage on MPS is also still incomplete. Treat `device="mps"` as an experiment to benchmark, not a default.
 
 ## Troubleshooting: segfault in scikit-learn's k-means
 
